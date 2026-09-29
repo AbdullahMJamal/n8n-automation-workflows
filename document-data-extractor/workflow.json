@@ -1,0 +1,1477 @@
+{
+  "name": "Document Data Extractor to Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "91df1e1d-8299-46f6-8dd3-60e36b227ae2",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "notes": "CONFIGURE: Google Drive OAuth2 credential + pick the 'Inbox' folder clients drop PDFs/images into. Polls every minute.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "74e4d527-6686-4780-9c8d-f7265575efee",
+              "name": "sheet_url",
+              "value": "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "a9702ffd-b772-4bb5-b235-6985f5f709eb",
+              "name": "confidence_threshold",
+              "value": 0.8,
+              "type": "number"
+            },
+            {
+              "id": "eef8602d-41ac-4de6-a8e1-7016780209a5",
+              "name": "max_poll_attempts",
+              "value": 12,
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "9595489d-0bd5-4b74-a648-2879f9162ff7",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "notes": "CONFIGURE: paste your Google Sheet URL. Threshold (0.8) and max poll attempts (12) are tunable here in one place.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "3b95aed9-4796-4474-b1b7-f6ff8372633f",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        440,
+        300
+      ],
+      "notes": "Processes one file at a time so the polling loop and dedup check never mix up files when several arrive in the same poll.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "bd1b76e1-3965-43e4-8fa0-ca3f932fc5dd",
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        660,
+        300
+      ],
+      "notes": "CONFIGURE: same Google Drive credential. Outputs the file as binary property 'data'. Works for PDFs/images; native Google Docs need a conversion option.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cloud.llamaindex.ai/api/v1/parsing/upload",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "53647fe2-59bd-4f10-95fe-46b8175ac7fe",
+      "name": "Upload to LlamaParse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "notes": "CONFIGURE: create a 'Header Auth' credential -> Name: Authorization, Value: Bearer <LLAMA_CLOUD_API_KEY>. Returns a job id.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const file = $('Loop Over Items').item.json;\nreturn {\n  json: {\n    jobId: $json.id,\n    attempt: 0,\n    status: String($json.status || 'PENDING').toUpperCase(),\n    file_id: file.id,\n    file_name: file.name,\n    file_link: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`\n  }\n};"
+      },
+      "id": "1a375c94-6d52-46f2-8842-882258a15c75",
+      "name": "Init Poll State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "notes": "Carries job id, attempt counter and file metadata through the polling loop. No config needed.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "d8509ce4-7e6c-49e6-8745-949aca13725c",
+      "name": "Wait 10s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        300
+      ],
+      "notes": "Pause between status checks.",
+      "notesInFlow": true,
+      "webhookId": "80206ba2-a4d0-4f20-af83-7ebb978e1dc4"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.cloud.llamaindex.ai/api/v1/parsing/job/{{ $json.jobId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "4ba0f0fc-7634-4c72-8b4c-43076821b611",
+      "name": "Check Job Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        300
+      ],
+      "notes": "CONFIGURE: same LlamaParse Header Auth credential.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const prev = $('Wait 10s').item.json;\nreturn {\n  json: {\n    ...prev,\n    attempt: (prev.attempt || 0) + 1,\n    status: String($json.status || 'UNKNOWN').toUpperCase(),\n    error: $json.error_message || $json.error || null\n  }\n};"
+      },
+      "id": "a43bcff6-e2ad-482a-9496-1a3e9902060b",
+      "name": "Track Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "notes": "Increments the retry counter and merges the latest job status back into the loop state.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "e954cd71-bf5a-40b8-80ea-0a5be53559c1",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "SUCCESS",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Success"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "6b0c9396-fcea-423e-8bc2-2d71208a08c3",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "PENDING",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "id": "5ae137ef-36d2-49a1-933c-436c47691acb",
+                    "leftValue": "={{ $json.attempt }}",
+                    "rightValue": "={{ $('Config').first().json.max_poll_attempts }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "lt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Keep Polling"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Failed or Timed Out"
+        }
+      },
+      "id": "ae88e1e5-d41c-418e-b6d4-62d84332f918",
+      "name": "Route by Status",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1980,
+        300
+      ],
+      "notes": "SUCCESS -> fetch result. PENDING and under the attempt cap -> back to Wait. ERROR/CANCELED or cap reached -> Discord alert (no infinite loop).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "options": {},
+        "content": "=**Parsing failed** for `{{ $json.file_name }}` after {{ $json.attempt }} attempt(s).\nStatus: {{ $json.status }}{{ $json.error ? ' | ' + $json.error : '' }}\nFile: {{ $json.file_link }}"
+      },
+      "id": "30c1a18b-780d-47bb-b914-84b980e548ac",
+      "name": "Discord: Parse Failed",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        560
+      ],
+      "notes": "CONFIGURE: Discord Webhook credential (Server Settings -> Integrations -> Webhooks).",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.cloud.llamaindex.ai/api/v1/parsing/job/{{ $json.jobId }}/result/markdown",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "2273a1ad-dfb7-40f7-8510-e8fcca8946d0",
+      "name": "Get Parsed Markdown",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        200
+      ],
+      "notes": "CONFIGURE: same LlamaParse Header Auth credential. Returns { markdown }.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.markdown }}",
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"document_type\": {\n      \"type\": \"string\",\n      \"description\": \"invoice, receipt, purchase_order, bill, quote, or other\"\n    },\n    \"vendor_name\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"invoice_number\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"invoice_date\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"ISO 8601 YYYY-MM-DD\"\n    },\n    \"due_date\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"ISO 8601 YYYY-MM-DD\"\n    },\n    \"line_items\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"description\": {\n            \"type\": \"string\"\n          },\n          \"quantity\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"unit_price\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"total\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        }\n      }\n    },\n    \"subtotal\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ]\n    },\n    \"tax\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ]\n    },\n    \"total_amount\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ]\n    },\n    \"currency\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"ISO 4217 code, e.g. USD, EUR, PKR\"\n    },\n    \"confidence_score\": {\n      \"type\": \"number\",\n      \"description\": \"0-1 honest confidence that every field is correct\"\n    }\n  },\n  \"required\": [\n    \"document_type\",\n    \"vendor_name\",\n    \"invoice_number\",\n    \"total_amount\",\n    \"currency\",\n    \"confidence_score\"\n  ]\n}",
+        "options": {
+          "systemPromptTemplate": "You are a meticulous financial document extraction engine.\nRules:\n- Extract only values that appear in the document. Use null for anything missing. Never guess or invent.\n- Dates as ISO 8601 (YYYY-MM-DD). Amounts as plain numbers: no currency symbols, no thousands separators.\n- currency as an ISO 4217 code, inferred from symbols only when unambiguous.\n- confidence_score: your honest 0-1 confidence that EVERY extracted field is correct. Lower it for blurry scans, handwriting, ambiguous layouts, or when subtotal + tax does not equal total_amount.\n- Always return the JSON object, even when most fields are null. Do not refuse."
+        }
+      },
+      "id": "89940287-c4e1-418e-bba1-fe1283473e68",
+      "name": "Information Extractor",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        200
+      ],
+      "notes": "Pulls structured invoice fields from the parsed markdown using the OpenAI model below. Edit the schema here to add client-specific fields.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0,
+          "maxTokens": 4096
+        }
+      },
+      "id": "da54d734-83db-4bb5-ad3e-f3790724d8ba",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2420,
+        440
+      ],
+      "notes": "CONFIGURE: OpenAI API credential (platform.openai.com key with credit). gpt-4o-mini is cheap and fine for clean documents; switch to gpt-4o for messy scans. Temperature 0 for consistent extraction.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const d = $json.output || {};\nconst src = $('Track Attempt').item.json;\nconst num = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);\nconst clean = v => (v === null || v === undefined) ? '' : String(v).trim();\n\nconst vendor = clean(d.vendor_name);\nconst invoice = clean(d.invoice_number);\nconst lineItems = Array.isArray(d.line_items) ? d.line_items : [];\nconst subtotal = num(d.subtotal), tax = num(d.tax), total = num(d.total_amount);\nlet confidence = num(d.confidence_score) ?? 0;\n\n// Deterministic sanity checks override the model's self-reported confidence\nlet totals_check = 'n/a';\nif (subtotal !== null && total !== null) {\n  const diff = Math.abs((subtotal + (tax ?? 0)) - total);\n  totals_check = diff <= 0.02 ? 'ok' : `mismatch (${diff.toFixed(2)})`;\n  if (diff > 0.02) confidence = Math.min(confidence, 0.5);\n}\nif (!vendor || !invoice || total === null) confidence = Math.min(confidence, 0.6);\n\nconst dedup_key = (vendor || invoice)\n  ? `${vendor.toLowerCase()}|${invoice.toLowerCase()}`\n  : `nokey|${src.file_id}`;\n\nreturn { json: {\n  timestamp: new Date().toISOString(),\n  source_file: src.file_name,\n  file_id: src.file_id,\n  file_link: src.file_link,\n  document_type: clean(d.document_type),\n  vendor_name: vendor,\n  invoice_number: invoice,\n  invoice_date: clean(d.invoice_date),\n  due_date: clean(d.due_date),\n  currency: clean(d.currency).toUpperCase(),\n  subtotal, tax, total_amount: total,\n  line_item_count: lineItems.length,\n  line_items: JSON.stringify(lineItems),\n  confidence_score: Number(confidence.toFixed(2)),\n  totals_check,\n  dedup_key\n}};"
+      },
+      "id": "e064147b-0037-432e-9cb2-c815dab51b39",
+      "name": "Normalize Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        200
+      ],
+      "notes": "Flattens the extraction, adds timestamp/filename, and double-checks the math: if subtotal + tax != total, or key fields are missing, confidence is capped so the row goes to review.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "dedup_key",
+              "lookupValue": "={{ $json.dedup_key }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d3dde050-0ad9-4032-8c08-524f92dd2998",
+      "name": "Lookup Existing Rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2860,
+        200
+      ],
+      "notes": "CONFIGURE: Google Sheets credential + select the sheet. The sheet's first row must contain these headers: timestamp, review_status, source_file, file_link, document_type, vendor_name, invoice_number, invoice_date, due_date, currency, subtotal, tax, total_amount, line_item_count, line_items, confidence_score, totals_check, dedup_key, file_id",
+      "notesInFlow": true,
+      "credentials": {},
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rec = $('Normalize Record').first().json;\nconst matches = $input.all().filter(i => i.json && i.json.dedup_key === rec.dedup_key);\nreturn [{ json: { ...rec, is_duplicate: matches.length > 0 } }];"
+      },
+      "id": "519cc71c-56c7-4a7c-88bc-2b6d1d3a98f1",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        200
+      ],
+      "notes": "Marks the record as a duplicate if the same vendor + invoice number already exists in the sheet.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "58e69a1c-0c76-4ea9-b6f9-250e194d7df0",
+              "leftValue": "={{ $json.is_duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "662b76d7-5e23-4f38-a67c-6180b8b0e134",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        200
+      ],
+      "notes": "true -> skip (already in the sheet). false -> confidence routing.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {},
+      "id": "50e8ce64-46db-4dde-a2db-e425993e4a87",
+      "name": "Skip Duplicate",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        40
+      ],
+      "notes": "Duplicate found; nothing is written. The file is then moved to the Duplicates folder.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.file_id }}",
+          "mode": "id"
+        },
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        }
+      },
+      "id": "91386631-e59d-42f5-b14e-f9709d48d5c6",
+      "name": "Move to Duplicates",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3740,
+        40
+      ],
+      "notes": "CONFIGURE: Google Drive credential + pick the 'Invoice Duplicates' folder. Clears the duplicate out of the Inbox.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "524bebf9-ec31-4000-9acf-6ce14053892e",
+                    "leftValue": "={{ $json.confidence_score }}",
+                    "rightValue": "={{ $('Config').first().json.confidence_threshold }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "gte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Approved"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "46d56394-6f01-458e-a72b-89928a795cb5",
+                    "leftValue": "={{ $json.confidence_score }}",
+                    "rightValue": "={{ $('Config').first().json.confidence_threshold }}",
+                    "operator": {
+                      "type": "number",
+                      "operation": "lt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Needs Review"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "819afe8b-55f2-4018-affe-752fc23d6fcb",
+      "name": "Confidence Check",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3520,
+        300
+      ],
+      "notes": "confidence >= threshold -> Approved. Below threshold -> Needs Review (flagged row + alert).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "review_status": "approved",
+            "source_file": "={{ $json.source_file }}",
+            "file_link": "={{ $json.file_link }}",
+            "document_type": "={{ $json.document_type }}",
+            "vendor_name": "={{ $json.vendor_name }}",
+            "invoice_number": "={{ $json.invoice_number }}",
+            "invoice_date": "={{ $json.invoice_date }}",
+            "due_date": "={{ $json.due_date }}",
+            "currency": "={{ $json.currency }}",
+            "subtotal": "={{ $json.subtotal }}",
+            "tax": "={{ $json.tax }}",
+            "total_amount": "={{ $json.total_amount }}",
+            "line_item_count": "={{ $json.line_item_count }}",
+            "line_items": "={{ $json.line_items }}",
+            "confidence_score": "={{ $json.confidence_score }}",
+            "totals_check": "={{ $json.totals_check }}",
+            "dedup_key": "={{ $json.dedup_key }}",
+            "file_id": "={{ $json.file_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_status",
+              "displayName": "review_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_file",
+              "displayName": "source_file",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_link",
+              "displayName": "file_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "document_type",
+              "displayName": "document_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "vendor_name",
+              "displayName": "vendor_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_date",
+              "displayName": "invoice_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "due_date",
+              "displayName": "due_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "subtotal",
+              "displayName": "subtotal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tax",
+              "displayName": "tax",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_amount",
+              "displayName": "total_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "line_item_count",
+              "displayName": "line_item_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "line_items",
+              "displayName": "line_items",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence_score",
+              "displayName": "confidence_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "totals_check",
+              "displayName": "totals_check",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_id",
+              "displayName": "file_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "87599e26-a0bd-4a72-ab17-388167133300",
+      "name": "Append Row (Approved)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3740,
+        200
+      ],
+      "notes": "CONFIGURE: same Google Sheets credential + same sheet as Lookup Existing Rows.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.timestamp }}",
+            "review_status": "needs_review",
+            "source_file": "={{ $json.source_file }}",
+            "file_link": "={{ $json.file_link }}",
+            "document_type": "={{ $json.document_type }}",
+            "vendor_name": "={{ $json.vendor_name }}",
+            "invoice_number": "={{ $json.invoice_number }}",
+            "invoice_date": "={{ $json.invoice_date }}",
+            "due_date": "={{ $json.due_date }}",
+            "currency": "={{ $json.currency }}",
+            "subtotal": "={{ $json.subtotal }}",
+            "tax": "={{ $json.tax }}",
+            "total_amount": "={{ $json.total_amount }}",
+            "line_item_count": "={{ $json.line_item_count }}",
+            "line_items": "={{ $json.line_items }}",
+            "confidence_score": "={{ $json.confidence_score }}",
+            "totals_check": "={{ $json.totals_check }}",
+            "dedup_key": "={{ $json.dedup_key }}",
+            "file_id": "={{ $json.file_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "review_status",
+              "displayName": "review_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_file",
+              "displayName": "source_file",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_link",
+              "displayName": "file_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "document_type",
+              "displayName": "document_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "vendor_name",
+              "displayName": "vendor_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_number",
+              "displayName": "invoice_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "invoice_date",
+              "displayName": "invoice_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "due_date",
+              "displayName": "due_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "subtotal",
+              "displayName": "subtotal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tax",
+              "displayName": "tax",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_amount",
+              "displayName": "total_amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "line_item_count",
+              "displayName": "line_item_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "line_items",
+              "displayName": "line_items",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence_score",
+              "displayName": "confidence_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "totals_check",
+              "displayName": "totals_check",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "dedup_key",
+              "displayName": "dedup_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_id",
+              "displayName": "file_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d8cc3b93-7e3b-43a3-9f77-22f76a707d6d",
+      "name": "Append Row (Needs Review)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3740,
+        440
+      ],
+      "notes": "CONFIGURE: same Google Sheets credential + same sheet. review_status = needs_review so you can filter them.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Check Duplicate').first().json.file_id }}",
+          "mode": "id"
+        },
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        }
+      },
+      "id": "5916d88c-5c85-4568-bad1-be5c5adf07e7",
+      "name": "Move to Processed",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3960,
+        200
+      ],
+      "notes": "CONFIGURE: Google Drive credential + pick the 'Processed' folder.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Check Duplicate').first().json.file_id }}",
+          "mode": "id"
+        },
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        }
+      },
+      "id": "965a3e65-ae99-45b7-ad45-39ef9b4d5b7f",
+      "name": "Move to Needs Review",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3960,
+        440
+      ],
+      "notes": "CONFIGURE: Google Drive credential + pick the 'Needs Review' folder.",
+      "notesInFlow": true,
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "options": {},
+        "content": "=**Document processed**\nVendor: {{ $('Check Duplicate').first().json.vendor_name || 'unknown' }}\nInvoice #: {{ $('Check Duplicate').first().json.invoice_number || 'n/a' }}\nTotal: {{ $('Check Duplicate').first().json.total_amount ?? 'n/a' }} {{ $('Check Duplicate').first().json.currency }}\nConfidence: {{ $('Check Duplicate').first().json.confidence_score }} | Totals check: {{ $('Check Duplicate').first().json.totals_check }}\nFile: {{ $('Check Duplicate').first().json.file_link }}\nSheet: {{ $('Config').first().json.sheet_url }}"
+      },
+      "id": "407aa0c4-0b03-4913-9caa-4af491f30df8",
+      "name": "Discord: Processed",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        200
+      ],
+      "notes": "DISABLED by default: clients only want alerts on problems. Enable for demos. Data still passes through so the loop continues.",
+      "notesInFlow": true,
+      "credentials": {},
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "options": {},
+        "content": "=**Needs review** (low confidence)\nVendor: {{ $('Check Duplicate').first().json.vendor_name || 'unknown' }}\nInvoice #: {{ $('Check Duplicate').first().json.invoice_number || 'n/a' }}\nTotal: {{ $('Check Duplicate').first().json.total_amount ?? 'n/a' }} {{ $('Check Duplicate').first().json.currency }}\nConfidence: {{ $('Check Duplicate').first().json.confidence_score }} | Totals check: {{ $('Check Duplicate').first().json.totals_check }}\nFile: {{ $('Check Duplicate').first().json.file_link }}\nSheet: {{ $('Config').first().json.sheet_url }}"
+      },
+      "id": "a9bfb923-25e4-43dc-af71-a849b609e78a",
+      "name": "Discord: Needs Review",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        440
+      ],
+      "notes": "CONFIGURE: Discord Webhook credential (can be a separate #needs-review channel).",
+      "notesInFlow": true,
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [
+          {
+            "node": "Upload to LlamaParse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to LlamaParse": {
+      "main": [
+        [
+          {
+            "node": "Init Poll State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Poll State": {
+      "main": [
+        [
+          {
+            "node": "Wait 10s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 10s": {
+      "main": [
+        [
+          {
+            "node": "Check Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Job Status": {
+      "main": [
+        [
+          {
+            "node": "Track Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Track Attempt": {
+      "main": [
+        [
+          {
+            "node": "Route by Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Status": {
+      "main": [
+        [
+          {
+            "node": "Get Parsed Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 10s",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Discord: Parse Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord: Parse Failed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Parsed Markdown": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor": {
+      "main": [
+        [
+          {
+            "node": "Normalize Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Record": {
+      "main": [
+        [
+          {
+            "node": "Lookup Existing Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Existing Rows": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Skip Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confidence Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Move to Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence Check": {
+      "main": [
+        [
+          {
+            "node": "Append Row (Approved)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append Row (Needs Review)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Row (Approved)": {
+      "main": [
+        [
+          {
+            "node": "Move to Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Processed": {
+      "main": [
+        [
+          {
+            "node": "Discord: Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord: Processed": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Row (Needs Review)": {
+      "main": [
+        [
+          {
+            "node": "Move to Needs Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Needs Review": {
+      "main": [
+        [
+          {
+            "node": "Discord: Needs Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord: Needs Review": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
